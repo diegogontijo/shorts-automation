@@ -3,14 +3,14 @@
 YouTube Shorts Pipeline — caveira narradora, estilo TikTok/Shorts viral.
 
 Fluxo:
-  1. Claude analisa a imagem da caveira (referência visual)
-  2. Claude gera roteiro estilo "What happens if you..." com time markers
-  3. ElevenLabs gera a narração
-  4. Grok (Aurora) gera imagem para cada cena
+  1. Claude analisa a imagem da caveira (referência visual detalhada para consistência)
+  2. Claude gera roteiro cinematográfico com direção de atuação por cena
+  3. ElevenLabs gera a narração (desabilitado por ora)
+  4. Grok (xAI Aurora) gera imagem cinematográfica para cada cena
   5. ffmpeg monta:
      - Hook de 3s (4 clips chamativos com click entre eles)
-     - 6 cenas com xfade + whoosh nas transições
-     - Legendas virais (3 palavras, offset pelo hook)
+     - 6 cenas com Ken Burns + xfade + whoosh nas transições
+     - Legendas virais (desabilitado por ora)
      - Música de fundo opcional (assets/background.mp3)
 
 Uso:
@@ -56,10 +56,10 @@ FPS           = 30
 RESOLUCAO_W   = 1080
 RESOLUCAO_H   = 1920
 
-HOOK_CLIP_DUR = 0.75                          # duração de cada clip no hook
-HOOK_N_CLIPS  = 4                             # quantos clips no hook
+HOOK_CLIP_DUR = 0.75
+HOOK_N_CLIPS  = 4
 HOOK_DUR      = HOOK_CLIP_DUR * HOOK_N_CLIPS  # 3.0s total
-TRANS_DUR     = 0.15                          # duração do xfade entre cenas
+TRANS_DUR     = 0.15
 
 xai_client = OpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1")
 
@@ -68,11 +68,17 @@ xai_client = OpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1")
 
 def imagem_para_base64(caminho: str) -> tuple[str, str]:
     caminho = Path(caminho)
-    media_types = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                   ".png": "image/png", ".webp": "image/webp"}
-    media_type = media_types.get(caminho.suffix.lower(), "image/png")
     with open(caminho, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8"), media_type
+        data = f.read()
+    if data[:3] == b"\xff\xd8\xff":
+        media_type = "image/jpeg"
+    elif data[:8] == b"\x89PNG\r\n\x1a\n":
+        media_type = "image/png"
+    elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        media_type = "image/webp"
+    else:
+        media_type = "image/jpeg"
+    return base64.b64encode(data).decode("utf-8"), media_type
 
 
 def get_audio_duration(audio_path: Path) -> float:
@@ -95,12 +101,10 @@ def sanitize_filename(nome: str) -> str:
 
 
 def ffmpeg_path(p: Path) -> str:
-    """Converte path para formato seguro no ffmpeg (Windows)."""
     return str(p).replace("\\", "/").replace(":", "\\:")
 
 
 def even(n: int) -> int:
-    """Garante número par (exigência do libx264)."""
     return n if n % 2 == 0 else n + 1
 
 
@@ -126,7 +130,6 @@ def gerar_sfx_whoosh() -> Path:
         return custom
     path = OUTPUT_DIR / "sfx_whoosh.mp3"
     if not path.exists():
-        # Frequency sweep ascendente = sensação de whoosh
         subprocess.run([
             "ffmpeg", "-y", "-f", "lavfi",
             "-i", "aevalsrc=0.45*sin(2*PI*(250+3000*t/0.2)*t)*exp(-10*t):s=44100:d=0.2",
@@ -138,28 +141,44 @@ def gerar_sfx_whoosh() -> Path:
 # ─── Etapa 1: Claude analisa a caveira ────────────────────────────────────────
 
 def analisar_caveira(imagem_path: str) -> str:
-    print("\n🔍 [1/6] Claude analisando a caveira...")
+    print("\n🔍 [1/5] Claude analisando a caveira...")
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     img_b64, media_type = imagem_para_base64(imagem_path)
 
     message = client.messages.create(
         model="claude-opus-4-5",
-        max_tokens=500,
+        max_tokens=700,
         messages=[{
             "role": "user",
             "content": [
                 {"type": "image", "source": {"type": "base64",
                  "media_type": media_type, "data": img_b64}},
                 {"type": "text", "text": (
-                    "Describe this skull/character in detail for consistent visual reference in AI image generation. "
-                    "Include: art style, dominant colors, distinctive features, lighting, texture, unique details. "
-                    "Reply in English, concisely (max 80 words), formatted as an image generation prompt."
+                    "Analyze this skull character with extreme precision. "
+                    "This description will be used VERBATIM in every AI image generation prompt "
+                    "to guarantee that the skull looks IDENTICAL across all scenes. "
+                    "Any vagueness will cause visual inconsistency — be ruthlessly specific.\n\n"
+                    "Cover ALL of the following:\n"
+                    "- SKULL FORM: exact cranium shape and volume, jaw width and angle, "
+                    "orbital socket style (deep/shallow, round/angular), teeth (count, gaps, damage), "
+                    "forehead curvature, zygomatic arch prominence\n"
+                    "- SURFACE & MATERIAL: bone texture (smooth/rough/porous), precise color palette "
+                    "(ivory, yellowed, stained, bleached patches — note exactly where), visible cracks "
+                    "and their location, surface weathering, patina intensity\n"
+                    "- DISTINCTIVE FEATURES: any unique markings, carvings, symbols, structural damage, "
+                    "asymmetries, or anomalies that make THIS skull unmistakable\n"
+                    "- LIGHTING RESPONSE: how light interacts with this surface — "
+                    "specular highlights placement, shadow behavior\n"
+                    "- ART DIRECTION: photorealistic or stylized, render quality, level of hyperdetail\n\n"
+                    "Reply in English, max 130 words, formatted as a tightly written AI generation prompt. "
+                    "Begin with 'Photorealistic skull character:'. "
+                    "Do NOT use generic skull descriptions. Capture what makes THIS specific skull unique."
                 )}
             ]
         }]
     )
     descricao = message.content[0].text.strip()
-    print(f"   ✅ {descricao[:80]}...")
+    print(f"   ✅ Referência capturada: {descricao[:90]}...")
     return descricao
 
 
@@ -178,19 +197,28 @@ Cena 6 [Ano 20] — Turistas te filmam com mãos tremendo. Um rosnado, uma inves
 
 
 def gerar_roteiro(tema: str, descricao_caveira: str) -> dict:
-    print(f"\n📝 [2/6] Gerando roteiro: '{tema}'")
+    print(f"\n📝 [2/5] Gerando roteiro: '{tema}'")
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-    prompt = f"""Você é roteirista de TikToks e YouTube Shorts virais no estilo "What happens if you...".
-Narrador: caveira com este visual — {descricao_caveira}
+    prompt = f"""Você é roteirista e diretor cinematográfico de YouTube Shorts virais no estilo "What happens if you...".
+Narrador protagonista: caveira com este visual exato — {descricao_caveira}
 
-REGRAS OBRIGATÓRIAS DE ESTILO:
+REGRAS OBRIGATÓRIAS DE ESTILO NARRATIVO:
 1. Título é sempre uma pergunta gancho ("O que acontece se você...", "Quantas X para você morrer?", "E se...")
-2. Segunda pessoa ("você") em toda a narração — o espectador VIVE a experiência
-3. Cada cena começa com um marcador de tempo (Dia 1, Semana 2, Ano 3, Hora 5, 1 mês...) que escala com a história
-4. Escalada progressiva obrigatória: mudança leve → consequência extrema → fim irreversível/chocante
-5. Frases curtas e sensoriais. Corta rápido. Sem enrolação.
-6. Última cena: UMA frase final, chocante, definitiva.
+2. Segunda pessoa ("você") — o espectador VIVE a experiência, não assiste
+3. Cada cena começa com um marcador de tempo que escala dramaticamente (Dia 1 → Semana 2 → Mês 3 → Ano 5...)
+4. Escalada progressiva obrigatória: sintoma leve → consequência visceral → colapso irreversível → fim chocante
+5. Frases curtas, cortantes, sensoriais. Zero enrolação. Cada palavra precisa pesar.
+6. Última cena: UMA frase final, definitiva, visualmente devastadora. Sem explicação.
+7. A caveira REAGE emocionalmente em cada cena — ela atua, expressa, não apenas narra em off.
+
+REGRAS CRÍTICAS DO PROMPT_IMAGEM (usado para geração de imagem por IA):
+- Cada prompt_imagem dirige uma POSE cinematográfica real da caveira — não uma cena genérica
+- Especifique a AÇÃO física da caveira: ângulo exato da cabeça, tensão na mandíbula, postura do corpo
+- Defina o PONTO DE VISTA da câmera: baixo ângulo / close extremo nos olhos / plongée / perspectiva lateral
+- Descreva a ILUMINAÇÃO cinematograficamente: ângulo da fonte (lateral 45°, contraluz, inferior), cor dominante, intensidade de sombra
+- O AMBIENTE deve ter profundidade e atmosfera: névoa, partículas, reflexos, elementos específicos — não seja genérico
+- A caveira deve parecer que está no meio de uma REAÇÃO, não posando
 
 {EXEMPLO_ESTILO}
 
@@ -206,7 +234,7 @@ Retorne APENAS JSON válido (sem markdown):
       "numero": 1,
       "marcador_tempo": "Dia 1",
       "duracao_segundos": 9,
-      "prompt_imagem": "Image prompt in English. Skull narrator in foreground. Scene background, dramatic lighting, cinematic. Max 60 words.",
+      "prompt_imagem": "Ultra-detailed cinematic image direction in English. MUST include ALL of: (1) skull character's precise physical pose — exact head angle, jaw state, body posture conveying emotion; (2) environment with specific textures, atmospheric particles, depth layers; (3) camera angle and framing; (4) lighting — color temperature, direction, shadow intensity; (5) overall dramatic mood. The skull must look mid-action, not static. Max 90 words.",
       "texto_legenda": "Trecho desta cena começando com o marcador de tempo"
     }}
   ],
@@ -218,7 +246,7 @@ Gere exatamente {NUM_CENAS} cenas. Durações devem somar {DURACAO_ALVO}s.
 
     message = client.messages.create(
         model="claude-opus-4-5",
-        max_tokens=2500,
+        max_tokens=3500,
         messages=[{"role": "user", "content": prompt}]
     )
 
@@ -237,35 +265,35 @@ Gere exatamente {NUM_CENAS} cenas. Durações devem somar {DURACAO_ALVO}s.
     return roteiro
 
 
-# ─── Etapa 3: Gerar Narração com ElevenLabs ───────────────────────────────────
+# ─── Etapa 3: Narração ElevenLabs ─────────────────────────────────────────────
+# DESABILITADO — narração e legendas puladas por enquanto
 
-def gerar_narracao(roteiro: dict) -> Path:
-    print("\n🎙️  [3/6] Gerando narração com ElevenLabs...")
-    response = requests.post(
-        f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}",
-        headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"},
-        json={
-            "text": roteiro["narracao_completa"],
-            "model_id": "eleven_multilingual_v2",
-            "voice_settings": {
-                "stability": 0.35,
-                "similarity_boost": 0.85,
-                "style": 0.7,
-                "use_speaker_boost": True
-            }
-        }
-    )
-    response.raise_for_status()
-    audio_path = OUTPUT_DIR / "narracao.mp3"
-    audio_path.write_bytes(response.content)
-    print(f"   ✅ Narração salva")
-    return audio_path
+# def gerar_narracao(roteiro: dict) -> Path:
+#     print("\n🎙️  [3/5] Gerando narração com ElevenLabs...")
+#     response = requests.post(
+#         f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}",
+#         headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"},
+#         json={
+#             "text": roteiro["narracao_completa"],
+#             "model_id": "eleven_multilingual_v2",
+#             "voice_settings": {
+#                 "stability": 0.35,
+#                 "similarity_boost": 0.85,
+#                 "style": 0.7,
+#                 "use_speaker_boost": True
+#             }
+#         }
+#     )
+#     response.raise_for_status()
+#     audio_path = OUTPUT_DIR / "narracao.mp3"
+#     audio_path.write_bytes(response.content)
+#     print(f"   ✅ Narração salva")
+#     return audio_path
 
 
 # ─── Etapa 4: Gerar Imagens com Grok (xAI Aurora) ────────────────────────────
 
-def gerar_imagem_grok(cena: dict, descricao_caveira: str, img_b64: str,
-                      media_type: str, indice: int) -> Path:
+def gerar_imagem_grok(cena: dict, descricao_caveira: str, indice: int) -> Path:
     caminho = OUTPUT_DIR / f"cena_{indice+1:02d}.png"
     if caminho.exists():
         print(f"   ♻️  Cena {indice+1} já existe, pulando...")
@@ -274,32 +302,35 @@ def gerar_imagem_grok(cena: dict, descricao_caveira: str, img_b64: str,
     print(f"   🎨 Gerando imagem {indice+1}/{NUM_CENAS}...")
 
     prompt_final = (
-        f"The skull narrator character: {descricao_caveira}. "
-        f"Scene: {cena['prompt_imagem']}. "
-        f"Style: cinematic, dramatic lighting, dark atmosphere, "
-        f"vertical 9:16 composition, high quality, detailed, no text, no watermarks."
-    )
-
-    xai_client.chat.completions.create(
-        model="grok-2-vision-latest",
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "image_url", "image_url": {
-                    "url": f"data:{media_type};base64,{img_b64}", "detail": "high"}},
-                {"type": "text", "text": f"Use this skull as visual reference. Generate: {prompt_final}"}
-            ]
-        }],
-        max_tokens=100
+        # Ancoragem de personagem — primeiro e mais enfático
+        f"SKULL CHARACTER — PRESERVE EXACT APPEARANCE: {descricao_caveira} "
+        f"CRITICAL: Do NOT alter the skull's shape, proportions, color, texture, cracks, "
+        f"or any distinctive feature. This skull must be unmistakably identical to the reference. "
+        # Direção de cena
+        f"SCENE: {cena['prompt_imagem']} "
+        # Direção de atuação / pose
+        f"PERFORMANCE: The skull is caught mid-action — expressive head tilt conveying tension or dread, "
+        f"jaw subtly open or clenched, body posture leaning into the scene's emotional weight. "
+        f"It must look like a character reacting, not an object sitting. "
+        # Cinematografia
+        f"CINEMATOGRAPHY: Ultra-photorealistic, hyperdetailed, cinema-grade quality. "
+        f"Physically-based bone rendering with accurate surface properties. "
+        f"Dramatic chiaroscuro lighting — deep shadows carving the skull's geometry, "
+        f"high-contrast highlights on bone ridges and orbital rims. "
+        f"Shallow depth of field: skull in razor-sharp focus, background in cinematic bokeh. "
+        f"Color grading: desaturated, cold or sickly color cast matching the scene's dread. "
+        # Composição
+        f"COMPOSITION: Vertical 9:16 framing. Skull dominates center-to-upper frame. "
+        f"Atmospheric environment fills the background with depth and texture. "
+        f"No text, no watermarks, no borders, no UI elements."
     )
 
     for tentativa in range(3):
         try:
             resp = xai_client.images.generate(
-                model="aurora",
+                model="grok-2-image-1212",
                 prompt=prompt_final,
                 n=1,
-                size="1024x1792",
                 response_format="b64_json"
             )
             caminho.write_bytes(base64.b64decode(resp.data[0].b64_json))
@@ -314,49 +345,21 @@ def gerar_imagem_grok(cena: dict, descricao_caveira: str, img_b64: str,
 
 def gerar_todas_imagens(roteiro: dict, descricao_caveira: str,
                         imagem_path: str) -> list[Path]:
-    print("\n🎨 [4/6] Gerando imagens com Grok...")
-    img_b64, media_type = imagem_para_base64(imagem_path)
+    print("\n🎨 [3/5] Gerando imagens com Grok (xAI Aurora)...")
     imagens = []
     for i, cena in enumerate(roteiro["cenas"]):
-        imagens.append(gerar_imagem_grok(cena, descricao_caveira, img_b64, media_type, i))
+        imagens.append(gerar_imagem_grok(cena, descricao_caveira, i))
         time.sleep(1)
     return imagens
 
 
-# ─── Etapa 5: Gerar Legendas SRT ──────────────────────────────────────────────
+# ─── Etapa 5: Legendas ────────────────────────────────────────────────────────
+# DESABILITADO
 
-def gerar_legendas(roteiro: dict, audio_path: Path) -> Path:
-    print("\n📄 [5/6] Gerando legendas...")
-
-    duracao_real       = get_audio_duration(audio_path)
-    fator              = duracao_real / DURACAO_ALVO
-    PALAVRAS_POR_BLOCO = 3
-
-    srt = ""
-    # Subtitles começam após o hook
-    t   = HOOK_DUR
-    idx = 1
-
-    for cena in roteiro["cenas"]:
-        dur_cena  = cena["duracao_segundos"] * fator
-        palavras  = cena["texto_legenda"].split()
-        blocos    = [palavras[j:j+PALAVRAS_POR_BLOCO]
-                     for j in range(0, len(palavras), PALAVRAS_POR_BLOCO)]
-        dur_bloco = dur_cena / max(len(blocos), 1)
-
-        for bloco in blocos:
-            fim  = t + dur_bloco - 0.05
-            srt += f"{idx}\n{ts(t)} --> {ts(fim)}\n{' '.join(bloco)}\n\n"
-            idx += 1
-            t   += dur_bloco
-
-    path = OUTPUT_DIR / "legendas.srt"
-    path.write_text(srt, encoding="utf-8")
-    print(f"   ✅ {idx-1} blocos (offset: {HOOK_DUR:.1f}s | narração: {duracao_real:.1f}s)")
-    return path
+# def gerar_legendas(roteiro: dict, audio_path: Path) -> Path: ...
 
 
-# ─── Etapa 6: Montagem Final ───────────────────────────────────────────────────
+# ─── Montagem Final ────────────────────────────────────────────────────────────
 
 def renderizar_clipes_ken_burns(imagens: list[Path],
                                  duracoes_reais: list[float]) -> list[Path]:
@@ -415,7 +418,6 @@ def criar_hook_video(clipes: list[Path], duracoes_reais: list[float]) -> Path:
 
 def criar_hook_audio(click_sfx: Path) -> Path:
     """3s de áudio com click a cada 0.75s (nos cortes entre clips)."""
-    # Silêncio base de 3s
     silencio = OUTPUT_DIR / "hook_silencio.mp3"
     subprocess.run([
         "ffmpeg", "-y", "-f", "lavfi",
@@ -423,7 +425,7 @@ def criar_hook_audio(click_sfx: Path) -> Path:
         str(silencio)
     ], check=True, capture_output=True)
 
-    n_clicks     = HOOK_N_CLIPS - 1   # 3 clicks
+    n_clicks     = HOOK_N_CLIPS - 1
     inputs       = ["-i", str(silencio)]
     filter_parts = ["[0:a]acopy[base]"]
     mix_labels   = ["[base]"]
@@ -459,7 +461,6 @@ def concatenar_com_xfade(clipes: list[Path], duracoes: list[float]) -> Path:
 
     for i in range(1, len(clipes)):
         cumulative += duracoes[i - 1]
-        # offset = tempo no stream de saída em que o xfade começa
         offset    = cumulative - i * TRANS_DUR
         out_label = "[vout]" if i == len(clipes) - 1 else f"[xf{i}]"
         filter_parts.append(
@@ -511,35 +512,19 @@ def mixar_whoosh_na_narracao(narracao: Path, whoosh_sfx: Path,
     return audio_final
 
 
-def montar_video(imagens: list[Path], audio: Path, legendas: Path,
-                 roteiro: dict) -> Path:
-    print("\n🎞️  [6/6] Montando vídeo...")
+def montar_video(imagens: list[Path], roteiro: dict) -> Path:
+    print("\n🎞️  [5/5] Montando vídeo final...")
 
-    duracao_real   = get_audio_duration(audio)
-    fator          = duracao_real / DURACAO_ALVO
-    duracoes_reais = [c["duracao_segundos"] * fator for c in roteiro["cenas"]]
+    duracoes_reais = [c["duracao_segundos"] for c in roteiro["cenas"]]
 
-    # 6a. Ken Burns em cada cena
     clipes = renderizar_clipes_ken_burns(imagens, duracoes_reais)
 
-    # 6b. SFX
-    click  = gerar_sfx_click()
-    whoosh = gerar_sfx_whoosh()
-
-    # 6c. Hook: vídeo + áudio com clicks
     print("   🎣 Criando hook intro (3s)...")
     hook_video = criar_hook_video(clipes, duracoes_reais)
-    hook_audio = criar_hook_audio(click)
 
-    # 6d. Cenas principais com xfade
     print("   🔀 Aplicando transições xfade...")
     video_trans = concatenar_com_xfade(clipes, duracoes_reais)
 
-    # 6e. Narração + whoosh nas transições
-    print("   🔊 Mixando whoosh nas transições...")
-    audio_com_whoosh = mixar_whoosh_na_narracao(audio, whoosh, duracoes_reais)
-
-    # 6f. Concat hook + cenas (vídeo)
     lista_v = OUTPUT_DIR / "lista_video_full.txt"
     lista_v.write_text(
         f"file '{hook_video.absolute()}'\nfile '{video_trans.absolute()}'"
@@ -550,41 +535,17 @@ def montar_video(imagens: list[Path], audio: Path, legendas: Path,
         "-i", str(lista_v), "-c", "copy", str(video_completo)
     ], check=True, capture_output=True)
 
-    # 6g. Concat hook_audio + narração (áudio)
-    lista_a = OUTPUT_DIR / "lista_audio_full.txt"
-    lista_a.write_text(
-        f"file '{hook_audio.absolute()}'\nfile '{audio_com_whoosh.absolute()}'"
-    )
-    audio_completo = OUTPUT_DIR / "audio_completo.mp3"
-    subprocess.run([
-        "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-        "-i", str(lista_a), "-c", "copy", str(audio_completo)
-    ], check=True, capture_output=True)
-
-    # Duração total: xfade consome (N-1)*TRANS_DUR do vídeo
-    total_dur = HOOK_DUR + duracao_real - (NUM_CENAS - 1) * TRANS_DUR
-
-    subtitle_style = (
-        f"subtitles={ffmpeg_path(legendas)}:"
-        "force_style='Fontname=Arial Black,Fontsize=22,Bold=1,"
-        "PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
-        "Outline=3,Shadow=0,Alignment=2,MarginV=350'"
-    )
+    total_dur = HOOK_DUR + DURACAO_ALVO - (NUM_CENAS - 1) * TRANS_DUR
     saida = OUTPUT_DIR / f"{sanitize_filename(roteiro['titulo'])}.mp4"
 
-    # 6h. Assembly final: vídeo + áudio + legendas + bg music (opcional)
     if BG_MUSIC.exists():
         subprocess.run([
             "ffmpeg", "-y",
             "-i", str(video_completo),
-            "-i", str(audio_completo),
             "-i", str(BG_MUSIC),
             "-filter_complex",
-            "[1:a]volume=1.0[narr];"
-            "[2:a]volume=0.15,aloop=loop=-1:size=2e+09[bg];"
-            "[narr][bg]amix=inputs=2:duration=first[aout]",
-            "-vf", subtitle_style,
-            "-map", "0:v", "-map", "[aout]",
+            "[1:a]volume=0.15,aloop=loop=-1:size=2e+09[bg]",
+            "-map", "0:v", "-map", "[bg]",
             "-c:v", "libx264", "-preset", "fast", "-crf", "18",
             "-c:a", "aac", "-b:a", "192k",
             "-t", str(total_dur), str(saida)
@@ -594,11 +555,8 @@ def montar_video(imagens: list[Path], audio: Path, legendas: Path,
         subprocess.run([
             "ffmpeg", "-y",
             "-i", str(video_completo),
-            "-i", str(audio_completo),
-            "-vf", subtitle_style,
-            "-map", "0:v", "-map", "1:a",
             "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-            "-c:a", "aac", "-b:a", "192k",
+            "-an",
             "-t", str(total_dur), str(saida)
         ], check=True, capture_output=True)
 
@@ -622,9 +580,8 @@ def main():
         sys.exit(1)
 
     for var, nome in [
-        (ANTHROPIC_API_KEY,  "ANTHROPIC_API_KEY"),
-        (XAI_API_KEY,        "XAI_API_KEY"),
-        (ELEVENLABS_API_KEY, "ELEVENLABS_API_KEY"),
+        (ANTHROPIC_API_KEY, "ANTHROPIC_API_KEY"),
+        (XAI_API_KEY,       "XAI_API_KEY"),
     ]:
         if not var:
             print(f"❌ {nome} não definida no .env")
@@ -639,10 +596,10 @@ def main():
 
     desc_caveira = analisar_caveira(imagem_path)
     roteiro      = gerar_roteiro(tema, desc_caveira)
-    audio        = gerar_narracao(roteiro)
+    # audio      = gerar_narracao(roteiro)        # DESABILITADO
     imagens      = gerar_todas_imagens(roteiro, desc_caveira, imagem_path)
-    legendas     = gerar_legendas(roteiro, audio)
-    video        = montar_video(imagens, audio, legendas, roteiro)
+    # legendas   = gerar_legendas(roteiro, audio)  # DESABILITADO
+    video        = montar_video(imagens, roteiro)
 
     print(f"\n🎉 Pronto em {(time.time()-inicio)/60:.1f} minutos!")
     print(f"📁 {video}")
